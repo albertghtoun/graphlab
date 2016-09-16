@@ -95,9 +95,9 @@
 // sort of type-sensitive ToString() function.
 #define CHECK_OP(op, val1, val2)                                        \
   do {                                                                  \
-    typeof(val1) v1 = val1;                                             \
-    typeof(val2) v2 = (typeof(val2))val2;                               \
-    if (!((v1) op (typeof(val1))(v2))) {                                \
+    __typeof__(val1) v1 = val1;                                             \
+    __typeof__(val2) v2 = (__typeof__(val2))val2;                               \
+    if (!((v1) op (__typeof__(val1))(v2))) {                                \
       logstream(LOG_FATAL) << "Check failed: " << #val1 << #op << #val2 \
                            << "  [" << v1 << #op << v2 << "]\n";        \
       sleep(1);assert(false);                                           \

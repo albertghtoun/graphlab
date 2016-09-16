@@ -7,10 +7,10 @@
  */
 
 #include <string>
+#include <vector>
 
 #include <graphlab.hpp>
 #include <graphlab/macros_def.hpp>
-
 
 // Constants for the algorithm. Better way would be to
 // pass them in the shared_data to the update function, but for
@@ -31,7 +31,7 @@ struct edge_data {
     
 }; // End of edge data
 
-
+static int global = 0;
 /**
  * Stores the value and the self weight
  */
@@ -39,7 +39,34 @@ struct vertex_data {
   float value;
   float self_weight; // GraphLab does not support edges from vertex to itself, so
   				     // we save weight of vertex's self-edge in the vertex data
-  vertex_data(float value = 1) : value(value), self_weight(0) { }
+//  std::vector<double> diff;
+  const static int max_in_degree = 65535;
+  double* diff;
+  int in_degree;
+  int label;
+  vertex_data(float value = 1) : value(value), self_weight(0), in_degree(0) {
+    label = __sync_fetch_and_add(&global, 1);
+    diff = new double[max_in_degree];
+    for (int i = 0; i < max_in_degree; i++)
+      diff[i] = -1;
+  }
+
+  vertex_data(const vertex_data& copy) {
+    this->value = copy.value;
+    this->self_weight = copy.self_weight;
+    this->label = copy.label;
+    this->in_degree = copy.in_degree;
+    this->diff = new double[max_in_degree];
+    for (int i = 0; i < max_in_degree; i++)
+      diff[i] = -1;
+    for (int i = 0; i < copy.in_degree; i++)
+      this->diff[i] = copy.diff[i];
+  }
+
+  ~vertex_data() {
+    delete diff;
+  }
+
 }; // End of vertex data
 
 
@@ -65,20 +92,37 @@ void pagerank_update(gl_types::iscope &scope,
                      gl_types::ishared_data* shared_data) {
   
   
-                     
+                       
   // Get the data associated with the vertex
   vertex_data& vdata = scope.vertex_data();
   
   // Sum the incoming weights; start by adding the 
   // contribution from a self-link.
   float sum = vdata.value * vdata.self_weight;
+  std::vector<graphlab::edge_id_t> in_edges = scope.in_edge_ids();
   
+  int size = scope.in_edge_ids().size();
+  vdata.in_degree = size;
+
+  int count = 0;
+  int i = 0;
   foreach(graphlab::edge_id_t eid, scope.in_edge_ids()) {
     // Get the neighobr vertex value
     const vertex_data& neighbor_vdata =
       scope.const_neighbor_vertex_data(scope.source(eid));
     double neighbor_value = neighbor_vdata.value;
-    
+   
+    if (vdata.diff[i] < 0)
+    	vdata.diff[i++] = neighbor_value;
+    else {
+	if(std::fabs(vdata.diff[i] - neighbor_value) < termination_bound) {
+	  count++;
+	  i++;
+	}
+	else
+	  vdata.diff[i++] = neighbor_value;
+    }
+
     // Get the edge data for the neighbor
     edge_data& edata = scope.edge_data(eid);
     // Compute the contribution of the neighbor
@@ -91,6 +135,7 @@ void pagerank_update(gl_types::iscope &scope,
     edata.old_source_value = neighbor_value;
   }
 
+  printf("count = %d, size = %d, wasted ratio = %.2f\n", count, size, count*1.0f/size);
   // compute the jumpweight
   sum = (1-damping_factor)/scope.num_vertices() + damping_factor*sum;
   vdata.value = sum;
