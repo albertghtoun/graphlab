@@ -39,28 +39,18 @@ struct vertex_data {
   float value;
   float self_weight; // GraphLab does not support edges from vertex to itself, so
   				     // we save weight of vertex's self-edge in the vertex data
-//  std::vector<double> diff;
-  const static int max_in_degree = 65535;
-  double* diff;
-  int in_degree;
+  std::vector<double>* diff;
   int label;
-  vertex_data(float value = 1) : value(value), self_weight(0), in_degree(0) {
+  vertex_data(float value = 1) : value(value), self_weight(0) {
     label = __sync_fetch_and_add(&global, 1);
-    diff = new double[max_in_degree];
-    for (int i = 0; i < max_in_degree; i++)
-      diff[i] = -1;
+    diff = new std::vector<double>();
   }
 
   vertex_data(const vertex_data& copy) {
     this->value = copy.value;
     this->self_weight = copy.self_weight;
     this->label = copy.label;
-    this->in_degree = copy.in_degree;
-    this->diff = new double[max_in_degree];
-    for (int i = 0; i < max_in_degree; i++)
-      diff[i] = -1;
-    for (int i = 0; i < copy.in_degree; i++)
-      this->diff[i] = copy.diff[i];
+    this->diff = new std::vector<double>(*copy.diff);
   }
 
   ~vertex_data() {
@@ -69,7 +59,8 @@ struct vertex_data {
 
 }; // End of vertex data
 
-
+static int wasted = 0;
+static int total = 0;
 
 //! The type of graph used in this program
 typedef graphlab::graph<vertex_data, edge_data> pagerank_graph;
@@ -90,7 +81,7 @@ typedef graphlab::types<pagerank_graph> gl_types;
 void pagerank_update(gl_types::iscope &scope,
                      gl_types::icallback &scheduler,
                      gl_types::ishared_data* shared_data) {
-  
+  //printf("vertex %d: update fn starts\n", scope.vertex_data().label); 
   
                        
   // Get the data associated with the vertex
@@ -102,8 +93,6 @@ void pagerank_update(gl_types::iscope &scope,
   std::vector<graphlab::edge_id_t> in_edges = scope.in_edge_ids();
   
   int size = scope.in_edge_ids().size();
-  vdata.in_degree = size;
-
   int count = 0;
   int i = 0;
   foreach(graphlab::edge_id_t eid, scope.in_edge_ids()) {
@@ -112,15 +101,15 @@ void pagerank_update(gl_types::iscope &scope,
       scope.const_neighbor_vertex_data(scope.source(eid));
     double neighbor_value = neighbor_vdata.value;
    
-    if (vdata.diff[i] < 0)
-    	vdata.diff[i++] = neighbor_value;
+    if ((*vdata.diff)[i] < 0)
+    	(*vdata.diff)[i++] = neighbor_value;
     else {
-	if(std::fabs(vdata.diff[i] - neighbor_value) < termination_bound) {
+	if(std::fabs((*vdata.diff)[i] - neighbor_value) < termination_bound) {
 	  count++;
 	  i++;
 	}
 	else
-	  vdata.diff[i++] = neighbor_value;
+	  (*vdata.diff)[i++] = neighbor_value;
     }
 
     // Get the edge data for the neighbor
@@ -135,7 +124,11 @@ void pagerank_update(gl_types::iscope &scope,
     edata.old_source_value = neighbor_value;
   }
 
-  printf("count = %d, size = %d, wasted ratio = %.2f\n", count, size, count*1.0f/size);
+  //printf("vertex %d wasted %d, total %d, ratio %.2f\n", 
+  //              scope.vertex_data().label, count, size, count*1.0f/size);
+  __sync_fetch_and_add(&wasted, count);
+  __sync_fetch_and_add(&total, size);
+
   // compute the jumpweight
   sum = (1-damping_factor)/scope.num_vertices() + damping_factor*sum;
   vdata.value = sum;
@@ -155,6 +148,8 @@ void pagerank_update(gl_types::iscope &scope,
       scheduler.add_task(task, residual);
     }
   }
+
+  //printf("vertex %d: update fn ends\n", scope.vertex_data().label); 
 } // end of pagerank update function
 
 
@@ -162,42 +157,101 @@ void pagerank_update(gl_types::iscope &scope,
 
 
 // Creates simple 5x5 graph
-void create_graph(pagerank_graph& graph) {
-	// Create 5 vertices
-	graph.add_vertex(vertex_data());
-	graph.add_vertex(vertex_data());
-	graph.add_vertex(vertex_data());
-	graph.add_vertex(vertex_data());
-	graph.add_vertex(vertex_data());
+void create_graph(pagerank_graph& graph, std::string filename) {
+	// if this is a text file
+	if (filename.substr(filename.length()-3,3)=="txt") {
+		std::ifstream fin(filename.c_str());
+		size_t edgecount = 0;
+		while(fin.good()) {
+			// read a line. if it begins with '#' it is a comment
+			std::string line;
+			std::getline(fin, line);
+			if (line[0] == '#') {
+				std::cout << line << std::endl;
+				continue;
+			}
 
+			// read the vertices
+			std::stringstream s(line);
+			size_t srcv, destv;
+			s >> srcv >> destv;
+			
+			// make sure we have all the vertices we need
+			while (graph.num_vertices() <= srcv || graph.num_vertices() <= destv) {
+				vertex_data v;
+				v.value = 1.0;
+				v.self_weight = 0.0;
+				graph.add_vertex(v);
+			}
+			
+			// for graph that has self edges, the weight of self edges are stored in the
+			// vertice's self_weight field.
+			if (srcv == destv) {
+				// selfedge
+				vertex_data& v = graph.vertex_data(srcv);
+				// we use selfweight temporarily to store the number of self edges
+				v.self_weight += 1.0;
+			} else {
+				// check if the edge already exists
+				std::pair<bool, graphlab::edge_id_t> edgefind = graph.find(srcv, destv);
+				if (edgefind.first) {
+					edge_data& edata = graph.edge_data(edgefind.first);
+					// if it does, increment the weight
+					edata.weight += 1.0;
+				}
+				else {
+					// we use weight temporarily as a counter
+					edge_data e(1.0);
+					graph.add_edge(srcv, destv, e);
+				}
+			}
+			++edgecount;
+			if (edgecount % 1000000 == 0)
+				std::cout << edgecount << " Edges inserted" << std::endl;
+      		}
+	} else {
+		printf("graph types other than .txt not supported right now.\n");
+		assert(0);
+	}
 	
-	// Page 0 links to page 3 only, so weight is 1
-	graph.add_edge(0, 3, edge_data(1));
-	
-	// Page 1 links to 0 and 2
-	graph.add_edge(1, 0, edge_data(0.5));
-	graph.add_edge(1, 2, edge_data(0.5));
-	
-	// ... and so on
-	graph.add_edge(2, 0, edge_data(1.0/3));
-	graph.add_edge(2, 1, edge_data(1.0/3));
-	graph.add_edge(2, 3, edge_data(1.0/3));
-	graph.add_edge(3, 0, edge_data(0.25));
-	graph.add_edge(3, 1, edge_data(0.25));
-	graph.add_edge(3, 2, edge_data(0.25));
-	graph.add_edge(3, 4, edge_data(0.25));
-    graph.add_edge(4, 0, edge_data(0.2));
- 	graph.add_edge(4, 1, edge_data(0.2));
-	graph.add_edge(4, 2, edge_data(0.2));
-	graph.add_edge(4, 3, edge_data(0.2));
-	// and self edge which must be handled specially from 4 to 4
-	graph.vertex_data(4).self_weight = 0.2;
-
+	// now we have to go through the edges again and figure out the
+	// weights
+	for (graphlab::vertex_id_t i = 0;i < graph.num_vertices(); ++i) {
+		vertex_data& v = graph.vertex_data(i);
+		// count the effective number of out edges
+		double weight = 0;
+		foreach(graphlab::edge_id_t e, graph.out_edge_ids(i)){
+			edge_data edata = graph.edge_data(e);
+			weight += edata.weight;
+		}
+		// remember to count selfweights
+		weight += v.self_weight;
+		if (weight != 0) {
+			// now the weights should all be scaled to 1
+			foreach(graphlab::edge_id_t e, graph.out_edge_ids(i)) {
+				edge_data& edata = graph.edge_data(e);
+				edata.weight /= weight;
+			}
+			v.self_weight /= weight;
+		}
+		//update neighbors counts
+		v.diff->reserve(graph.in_edge_ids(i).size());
+		for (int j = 0; j < graph.in_edge_ids(i).size(); j++) {
+			(*v.diff).push_back(-1.0);
+		}
+	}
+        
+	graph.finalize();
 }
 
-
+FILE * fp;
 
 int main(int argc, char** argv) {
+  if (argc <= 1) {
+	printf("Usage: pagerank <input graph text file>\n");
+	return 0;
+  }
+
   global_logger().set_log_level(LOG_INFO);
   global_logger().set_log_to_console(true);
   logger(LOG_INFO, "PageRank starting\n");
@@ -213,7 +267,7 @@ int main(int argc, char** argv) {
   core.set_engine_options(clopts);
   
   // Create a synthetic graph
-  create_graph(core.graph());
+  create_graph(core.graph(), std::string(argv[1]));
 
   // Schedule all vertices to run pagerank update on the
   // first round.
@@ -225,7 +279,11 @@ int main(int argc, char** argv) {
   // We are done, now output results.
   std::cout << "Graphlab finished, runtime: " << runtime << " seconds." << std::endl;
   
-  
+  std::cout << "wasted ratio: " << wasted*(1.0)/total << std::endl; 
+
+  fp = fopen("result.txt", "a");
+  fprintf(fp, "%s: wasted ratio: %.2f%%\n", argv[1], wasted*(100.0)/total);
+  fclose(fp);
   // First we need to compute a normalizer. This could be
   // done with the sync facility, but for simplicity, we do
   // it by hand.

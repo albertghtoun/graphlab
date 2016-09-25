@@ -1,7 +1,7 @@
 #!/bin/bash
 
 
-install_directory="/usr/local"
+install_directory="/home/chao/install/graphlab"
 
 reldir="./release"
 debugdir="./debug"
