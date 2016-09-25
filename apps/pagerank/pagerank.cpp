@@ -245,20 +245,32 @@ void create_graph(pagerank_graph& graph, std::string filename) {
 }
 
 FILE * fp;
+#include <pthread.h>
 
 int main(int argc, char** argv) {
-  if (argc <= 1) {
-	printf("Usage: pagerank <input graph text file>\n");
-	return 0;
-  }
-
   global_logger().set_log_level(LOG_INFO);
   global_logger().set_log_to_console(true);
   logger(LOG_INFO, "PageRank starting\n");
-   
+  
+  int numCPU = sysconf(_SC_NPROCESSORS_ONLN); 
   // Setup the parser
   graphlab::command_line_options
-    clopts("Run the PageRank algorithm.");
+    clopts("Run the PageRank algorithm.", numCPU);
+ 
+  std::string input_filename; 
+  clopts.attach_option("infile", &input_filename,
+		  "PageRank input file. In src, dest, weight format.");
+
+  // Parse the command line input
+  if(!clopts.parse(argc, argv)) {
+	  std::cout << "Error in parsing input." << std::endl;
+	  return EXIT_FAILURE;
+  }
+  if(!clopts.is_set("infile")) {
+	  std::cout << "Input file no provided!" << std::endl;
+	  clopts.print_description();
+	  return EXIT_FAILURE;
+  }
 
   // Create a graphlab core
   gl_types::core core;
@@ -267,7 +279,7 @@ int main(int argc, char** argv) {
   core.set_engine_options(clopts);
   
   // Create a synthetic graph
-  create_graph(core.graph(), std::string(argv[1]));
+  create_graph(core.graph(), input_filename);
 
   // Schedule all vertices to run pagerank update on the
   // first round.
@@ -282,7 +294,7 @@ int main(int argc, char** argv) {
   std::cout << "wasted ratio: " << wasted*(1.0)/total << std::endl; 
 
   fp = fopen("result.txt", "a");
-  fprintf(fp, "%s: wasted ratio: %.2f%%\n", argv[1], wasted*(100.0)/total);
+  fprintf(fp, "%s: wasted ratio: %.2f%%\n", input_filename.c_str(), wasted*(100.0)/total);
   fclose(fp);
   // First we need to compute a normalizer. This could be
   // done with the sync facility, but for simplicity, we do
