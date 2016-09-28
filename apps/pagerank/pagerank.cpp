@@ -8,7 +8,8 @@
 
 #include <string>
 #include <vector>
-
+#include <pthread.h>
+#include <algorithm>
 #include <graphlab.hpp>
 #include <graphlab/macros_def.hpp>
 
@@ -39,28 +40,30 @@ struct vertex_data {
   float value;
   float self_weight; // GraphLab does not support edges from vertex to itself, so
   				     // we save weight of vertex's self-edge in the vertex data
-  std::vector<double>* diff;
+//  std::vector<double>* value_cache;  // the old neighbor values collected
   int label;
   vertex_data(float value = 1) : value(value), self_weight(0) {
     label = __sync_fetch_and_add(&global, 1);
-    diff = new std::vector<double>();
+//    value_cache = new std::vector<double>();
   }
 
   vertex_data(const vertex_data& copy) {
     this->value = copy.value;
     this->self_weight = copy.self_weight;
     this->label = copy.label;
-    this->diff = new std::vector<double>(*copy.diff);
+//    this->value_cache = new std::vector<double>(*copy.value_cache);
   }
 
   ~vertex_data() {
-    delete diff;
+//    delete value_cache;
   }
 
 }; // End of vertex data
 
+#ifdef WASTE_ANALYSIS
 static int wasted = 0;
 static int total = 0;
+#endif
 
 //! The type of graph used in this program
 typedef graphlab::graph<vertex_data, edge_data> pagerank_graph;
@@ -73,8 +76,7 @@ typedef graphlab::graph<vertex_data, edge_data> pagerank_graph;
 typedef graphlab::types<pagerank_graph> gl_types;
 
 
-
-
+static double gp = 1.0; //the gather percentage
 /**
  * The Page rank update function
  */
@@ -93,23 +95,62 @@ void pagerank_update(gl_types::iscope &scope,
   std::vector<graphlab::edge_id_t> in_edges = scope.in_edge_ids();
   
   int size = scope.in_edge_ids().size();
+  int ngather = (int)ceil(size*gp);
+#ifdef WASTE_ANALYSIS  
   int count = 0;
-  int i = 0;
+#endif
+  int k = 0;
+  std::vector<graphlab::edge_id_t> edges = scope.in_edge_ids(); 
+  std::random_shuffle(edges.begin(), edges.end());
+  for (; k < ngather; ++k) {
+	  // Get the neighobr vertex value
+	  const vertex_data& neighbor_vdata =
+		  scope.const_neighbor_vertex_data(scope.source(edges[k]));
+	  double neighbor_value = neighbor_vdata.value;
+
+#ifdef WASTE_ANALYSIS
+	  if(std::fabs(edata.old_source_value - neighbor_value) < termination_bound) {
+		  count++;
+	  }
+#endif
+	  // Get the edge data for the neighbor
+	  edge_data& edata = scope.edge_data(edges[k]);
+	  // Compute the contribution of the neighbor
+	  double contribution = edata.weight * neighbor_value;
+
+	  // Add the contribution to the sum
+	  sum += contribution;
+
+	  // Remember this value as last read from the neighbor
+	  edata.old_source_value = neighbor_value;
+  }
+
+  for (; k < size; ++k) {
+	  // Get the edge data for the neighbor
+	  edge_data& edata = scope.edge_data(edges[k]);
+	  // Compute the contribution of the neighbor
+	  double contribution = edata.weight * edata.old_source_value;
+
+	  // Add the contribution to the sum
+	  sum += contribution;
+  }
+
+/*
   foreach(graphlab::edge_id_t eid, scope.in_edge_ids()) {
     // Get the neighobr vertex value
     const vertex_data& neighbor_vdata =
       scope.const_neighbor_vertex_data(scope.source(eid));
     double neighbor_value = neighbor_vdata.value;
    
-    if ((*vdata.diff)[i] < 0)
-    	(*vdata.diff)[i++] = neighbor_value;
+    if ((*vdata.value_cache)[i] < 0)
+    	(*vdata.value_cache)[i++] = neighbor_value;
     else {
-	if(std::fabs((*vdata.diff)[i] - neighbor_value) < termination_bound) {
+	if(std::fabs((*vdata.value_cache)[i] - neighbor_value) < termination_bound) {
 	  count++;
 	  i++;
 	}
 	else
-	  (*vdata.diff)[i++] = neighbor_value;
+	  (*vdata.value_cache)[i++] = neighbor_value;
     }
 
     // Get the edge data for the neighbor
@@ -128,7 +169,7 @@ void pagerank_update(gl_types::iscope &scope,
   //              scope.vertex_data().label, count, size, count*1.0f/size);
   __sync_fetch_and_add(&wasted, count);
   __sync_fetch_and_add(&total, size);
-
+*/
   // compute the jumpweight
   sum = (1-damping_factor)/scope.num_vertices() + damping_factor*sum;
   vdata.value = sum;
@@ -235,30 +276,41 @@ void create_graph(pagerank_graph& graph, std::string filename) {
 			v.self_weight /= weight;
 		}
 		//update neighbors counts
-		v.diff->reserve(graph.in_edge_ids(i).size());
-		for (int j = 0; j < graph.in_edge_ids(i).size(); j++) {
-			(*v.diff).push_back(-1.0);
-		}
+//		v.value_cache->reserve(graph.in_edge_ids(i).size());
+//		for (int j = 0; j < graph.in_edge_ids(i).size(); j++) {
+//			(*v.value_cache).push_back(-1.0);
+//		}
 	}
         
 	graph.finalize();
 }
 
 FILE * fp;
-
 int main(int argc, char** argv) {
-  if (argc <= 1) {
-	printf("Usage: pagerank <input graph text file>\n");
-	return 0;
-  }
-
   global_logger().set_log_level(LOG_INFO);
   global_logger().set_log_to_console(true);
   logger(LOG_INFO, "PageRank starting\n");
-   
+  
+  int numCPU = sysconf(_SC_NPROCESSORS_ONLN); 
   // Setup the parser
   graphlab::command_line_options
-    clopts("Run the PageRank algorithm.");
+    clopts("Run the PageRank algorithm.", numCPU);
+ 
+  std::string input_filename; 
+  clopts.attach_option("infile", &input_filename,
+		  "PageRank input file. In src, dest, weight format.");
+  clopts.attach_option("gather_percentage", &gp, 1.0, 
+		  "The percentage of real gather from neighbors.");
+  // Parse the command line input
+  if(!clopts.parse(argc, argv)) {
+	  std::cout << "Error in parsing input." << std::endl;
+	  return EXIT_FAILURE;
+  }
+  if(!clopts.is_set("infile")) {
+	  std::cout << "Input file no provided!" << std::endl;
+	  clopts.print_description();
+	  return EXIT_FAILURE;
+  }
 
   // Create a graphlab core
   gl_types::core core;
@@ -267,7 +319,7 @@ int main(int argc, char** argv) {
   core.set_engine_options(clopts);
   
   // Create a synthetic graph
-  create_graph(core.graph(), std::string(argv[1]));
+  create_graph(core.graph(), input_filename);
 
   // Schedule all vertices to run pagerank update on the
   // first round.
@@ -278,12 +330,12 @@ int main(int argc, char** argv) {
 
   // We are done, now output results.
   std::cout << "Graphlab finished, runtime: " << runtime << " seconds." << std::endl;
-  
+#ifdef WASTE_ANALYSIS 
   std::cout << "wasted ratio: " << wasted*(1.0)/total << std::endl; 
-
   fp = fopen("result.txt", "a");
-  fprintf(fp, "%s: wasted ratio: %.2f%%\n", argv[1], wasted*(100.0)/total);
+  fprintf(fp, "%s: wasted ratio: %.2f%%\n", input_filename.c_str(), wasted*(100.0)/total);
   fclose(fp);
+#endif
   // First we need to compute a normalizer. This could be
   // done with the sync facility, but for simplicity, we do
   // it by hand.
