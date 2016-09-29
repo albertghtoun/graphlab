@@ -1,4 +1,5 @@
 debug
 profile
 release
-input/
+input/*.mat
+input/*.txt
