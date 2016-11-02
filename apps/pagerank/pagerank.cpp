@@ -31,14 +31,9 @@ struct edge_data {
   edge_data(float weight) :
     weight(weight), old_source_value(0) { } 
 
-  //access wrappers
-  float weight_READ(void) const {return weight;}
-  float old_source_value_READ(void) const {return old_source_value;}
-  void weight_WRITE(float w) {weight = w;}
-  void old_source_value_WRITE(float osv) {old_source_value = osv;}
 }; // End of edge data
 
-static int global = 0;
+// static int global = 0;
 /**
  * Stores the value and the self weight
  */
@@ -47,31 +42,50 @@ struct vertex_data {
   float self_weight; // GraphLab does not support edges from vertex to itself, so
   				     // we save weight of vertex's self-edge in the vertex data
 //  std::vector<double>* value_cache;  // the old neighbor values collected
-  int label;
+//  int label;
   vertex_data(float value = 1) : value(value), self_weight(0) {
-    label = __sync_fetch_and_add(&global, 1);
+//    label = __sync_fetch_and_add(&global, 1);
 //    value_cache = new std::vector<double>();
   }
 
   vertex_data(const vertex_data& copy) {
     this->value = copy.value;
     this->self_weight = copy.self_weight;
-    this->label = copy.label;
+//    this->label = copy.label;
 //    this->value_cache = new std::vector<double>(*copy.value_cache);
   }
-
-  //function wrappers
-  float value_READ(void) const {return value;}
-  float self_weight_READ(void) const {return self_weight;}
-  
-  void value_WRITE(float v) {value = v;}
-  void self_weight_WRITE(float sw) {self_weight = sw;}
 
   ~vertex_data() {
 //    delete value_cache;
   }
 
 }; // End of vertex data
+
+//access wrappers
+__attribute__((noinline))
+static float* edge_weight_ptr(edge_data* edge, vertex_data* active)
+						{return &edge->weight;}
+__attribute__((noinline))
+static float* edge_old_source_value_ptr(edge_data* edge, vertex_data* active)
+						{return &edge->old_source_value;}
+__attribute__((noinline))
+static float* vertex_value_ptr(vertex_data* vertex, vertex_data* active) 
+						{return &vertex->value;}
+__attribute__((noinline))
+static float* vertex_self_weight_ptr(vertex_data* vertex, vertex_data* active)
+						{return &vertex->self_weight;}
+
+__attribute__((noinline))
+static vertex_data& vertex_dereference(vertex_data* addr, size_t vertex_data_size) {
+//	printf("%p\n", addr);
+	return *addr;
+}
+
+__attribute__((noinline))
+static edge_data& edge_dereference(edge_data* addr, size_t edge_data_size) {
+//	printf("%p\n", addr);
+	return *addr;
+}
 
 #ifdef WASTE_ANALYSIS
 static int wasted = 0;
@@ -88,9 +102,6 @@ typedef graphlab::graph<vertex_data, edge_data> pagerank_graph;
  */
 typedef graphlab::types<pagerank_graph> gl_types;
 
-static vertex_data& vertex_dereference(vertex_data* addr) {return *addr;}
-static edge_data& edge_dereference(edge_data* addr) {return *addr;}
-
 static double gp = 1.0; //the gather percentage
 /**
  * The Page rank update function
@@ -102,11 +113,12 @@ void pagerank_update(gl_types::iscope &scope,
                        
   // Get the data associated with the vertex
   vertex_data* vaddr = &scope.vertex_data();
-  vertex_data& vdata = vertex_dereference(vaddr);
+  vertex_data& vdata = vertex_dereference(vaddr, sizeof(vertex_data));
+  vertex_data* active = vaddr;
 
   // Sum the incoming weights; start by adding the 
   // contribution from a self-link.
-  float sum = vdata.value_READ() * vdata.self_weight_READ();
+  float sum = *vertex_value_ptr(&vdata, active) * (*vertex_self_weight_ptr(&vdata, active));
   std::vector<graphlab::edge_id_t> in_edges = scope.in_edge_ids();
   
   int size = scope.in_edge_ids().size();
@@ -121,34 +133,34 @@ void pagerank_update(gl_types::iscope &scope,
 	  // Get the neighobr vertex value
 	  const vertex_data* neighbor_vaddr =
 		  &scope.const_neighbor_vertex_data(scope.source(edges[k]));
-	  const vertex_data& neighbor_vdata = vertex_dereference((vertex_data*)neighbor_vaddr);
-	  double neighbor_value = neighbor_vdata.value_READ();
+	  vertex_data& neighbor_vdata = vertex_dereference((vertex_data*)neighbor_vaddr, sizeof(vertex_data));
+	  double neighbor_value = *vertex_value_ptr(&neighbor_vdata, active);
 
 	  // Get the edge data for the neighbor
 	  edge_data* eaddr = &scope.edge_data(edges[k]);
-	  edge_data& edata = edge_dereference(eaddr);
+	  edge_data& edata = edge_dereference(eaddr, sizeof(edge_data));
 #ifdef WASTE_ANALYSIS
-	  if(std::fabs(edata.old_source_value_READ() - neighbor_value) < termination_bound) {
+	  if(std::fabs(*old_source_value_ptr(&edata, active) - neighbor_value) < termination_bound) {
 		  count++;
 	  }
 #endif
 	  // Compute the contribution of the neighbor
-	  double contribution = edata.weight_READ() * neighbor_value;
+	  double contribution = (*edge_weight_ptr(&edata, active)) * neighbor_value;
 
 	  // Add the contribution to the sum
 	  sum += contribution;
 
 	  // Remember this value as last read from the neighbor
-	  edata.old_source_value_WRITE(neighbor_value);
+	  *edge_old_source_value_ptr(&edata, active) = neighbor_value;
   }
 
   for (; k < size; ++k) {
 	  // Get the edge data for the neighbor
 	  edge_data* eaddr = &scope.edge_data(edges[k]);
-	  edge_data& edata = edge_dereference(eaddr);
+	  edge_data& edata = edge_dereference(eaddr, sizeof(edge_data));
 
 	  // Compute the contribution of the neighbor
-	  double contribution = edata.weight_READ() * edata.old_source_value_READ();
+	  double contribution = (*edge_weight_ptr(&edata, active)) * (*edge_old_source_value_ptr(&edata, active));
 
 	  // Add the contribution to the sum
 	  sum += contribution;
@@ -191,17 +203,17 @@ void pagerank_update(gl_types::iscope &scope,
 */
   // compute the jumpweight
   sum = (1-damping_factor)/scope.num_vertices() + damping_factor*sum;
-  vdata.value_WRITE(sum);
+  *vertex_value_ptr(&vdata, active) = sum;
   
   // Schedule the neighbors as needed
   foreach(graphlab::edge_id_t eid, scope.out_edge_ids()) {
     edge_data* outedgeaddr = &scope.edge_data(eid);
-    edge_data& outedgedata = edge_dereference(outedgeaddr);
+    edge_data& outedgedata = edge_dereference(outedgeaddr, sizeof(edge_data));
     // Compute edge-specific residual by comparing the new value of this
     // vertex to the previous value seen by the neighbor vertex.
     double residual =
-      outedgedata.weight_READ() *
-      std::fabs(outedgedata.old_source_value_READ() - vdata.value_READ());
+      (*edge_weight_ptr(&outedgedata, active)) *
+      std::fabs(*edge_old_source_value_ptr(&outedgedata, active) - *vertex_value_ptr(&vdata, active));
     // If the neighbor changed sufficiently add to scheduler.
     if(residual > termination_bound) {
       gl_types::update_task task(scope.target(eid), pagerank_update);
@@ -239,8 +251,8 @@ void create_graph(pagerank_graph& graph, std::string filename) {
 			// make sure we have all the vertices we need
 			while (graph.num_vertices() <= srcv || graph.num_vertices() <= destv) {
 				vertex_data v;
-				v.value_WRITE(1.0);
-				v.self_weight_WRITE(0.0);
+				v.value = 1.0;
+				v.self_weight = 0.0;
 				graph.add_vertex(v);
 			}
 			
@@ -250,14 +262,16 @@ void create_graph(pagerank_graph& graph, std::string filename) {
 				// selfedge
 				vertex_data& v = graph.vertex_data(srcv);
 				// we use selfweight temporarily to store the number of self edges
-				v.self_weight_WRITE(v.self_weight_READ() + 1.0);
+				////*vertex_self_weight_ptr(v) = *vertex_self_weight_ptr(v) + 1.0;
+				v.self_weight = v.self_weight + 1.0;
 			} else {
 				// check if the edge already exists
 				std::pair<bool, graphlab::edge_id_t> edgefind = graph.find(srcv, destv);
 				if (edgefind.first) {
 					edge_data& edata = graph.edge_data(edgefind.first);
 					// if it does, increment the weight
-					edata.weight_WRITE(edata.weight_READ() + 1.0);
+					////*edge_weight_ptr(edata) = *edge_weight_ptr(edata) + 1.0;
+					edata.weight = edata.weight + 1.0;
 				}
 				else {
 					// we use weight temporarily as a counter
@@ -281,18 +295,22 @@ void create_graph(pagerank_graph& graph, std::string filename) {
 		// count the effective number of out edges
 		double weight = 0;
 		foreach(graphlab::edge_id_t e, graph.out_edge_ids(i)){
-			edge_data edata = graph.edge_data(e);
-			weight += edata.weight_READ();
+			edge_data& edata = graph.edge_data(e);
+			////weight += *edge_weight_ptr(edata);
+			weight += edata.weight;
 		}
 		// remember to count selfweights
-		weight += v.self_weight_READ();
+		////weight += *vertex_self_weight_ptr(v);
+		weight += v.self_weight;
 		if (weight != 0) {
 			// now the weights should all be scaled to 1
 			foreach(graphlab::edge_id_t e, graph.out_edge_ids(i)) {
 				edge_data& edata = graph.edge_data(e);
-				edata.weight_WRITE(edata.weight_READ() / weight);
+				////*edge_weight_ptr(edata) = *edge_weight_ptr(edata) / weight;
+				edata.weight = edata.weight / weight;
 			}
-			v.self_weight_WRITE(v.self_weight_READ() / weight);
+			////*vertex_self_weight_ptr(v) = *vertex_self_weight_ptr(v) / weight;
+			v.self_weight = v.self_weight / weight;
 		}
 		//update neighbors counts
 //		v.value_cache->reserve(graph.in_edge_ids(i).size());
