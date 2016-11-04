@@ -21,6 +21,7 @@
 // Schedulers
 #include <graphlab/schedulers/fifo_scheduler.hpp>
 #include <graphlab/schedulers/fifo_cache_scheduler.hpp>
+#include <graphlab/schedulers/fifo_cache_nc_scheduler.hpp>
 #include <graphlab/schedulers/priority_scheduler.hpp>
 #include <graphlab/schedulers/sampling_scheduler.hpp>
 #include <graphlab/schedulers/splash_scheduler.hpp>
@@ -150,6 +151,11 @@ namespace graphlab {
                                                   ncpus);
       } else if (scheduler == "fifo_cache") {
         return new_engine<Graph, fifo_cache_scheduler<Graph> >(engine,
+                                                  scope_factory,
+                                                  _graph,
+                                                  ncpus);
+      } else if (scheduler == "fifo_cache_nc") {
+        return new_engine<Graph, fifo_cache_nc_scheduler<Graph> >(engine,
                                                   scope_factory,
                                                   _graph,
                                                   ncpus);

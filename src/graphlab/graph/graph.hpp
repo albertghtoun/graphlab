@@ -281,30 +281,14 @@ namespace graphlab {
       return edge_id(target, source);
     } // end of rev_edge_id
 
-/* 
     __attribute__((noinline)) 
-	    void PIN_cache_vertex(VertexData* vdata, size_t size) {
-		    logger(LOG_INFO, "vdata = %p. size = %d\n", vdata, size);
-		    return;
-	    }
-
-    __attribute__((noinline)) 
-	    void PIN_cache_edge(EdgeData* edata, size_t size) {
-		    logger(LOG_INFO, "vdata = %p. size = %d\n", edata, size);
-		    return;
-	    }
-*/
-
-    __attribute__((noinline)) 
-	    void query_cache(VertexData* active, int* cached) {
-	    }
+	    void query_cache(VertexData* active, int* cached) {}
     /** 
      * Creates a vertex containing the vertex data and returns the id
      * of the new vertex id.
      */
     vertex_id_t add_vertex(const VertexData& vdata = VertexData() ) {
       vertices.push_back(vdata);
-      // PIN_cache_vertex(&vertices[vertices.size()-1], sizeof(VertexData));
       // Resize edge maps
       out_edges.resize(vertices.size());
       in_edges.resize(vertices.size());
@@ -343,8 +327,6 @@ namespace graphlab {
       }
       // Add the edge to the set of edge data (this copies the edata)
       edges.push_back( edge( source, target, edata ) );
-      //PIN_cache_edge(&edges[edges.size()-1].data(), sizeof(EdgeData));
-      
       // Add the edge id to in and out edge maps
       edge_id_t edge_id = edges.size() - 1;
       in_edges[target].push_back(edge_id);

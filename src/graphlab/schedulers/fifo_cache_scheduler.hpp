@@ -64,9 +64,9 @@ namespace graphlab {
     /** Get the next element in the queue */
     sched_status::status_enum get_next_task(size_t cpuid, update_task_type &ret_task) {    
       if (terminator.finish()) {
-	logger(LOG_INFO, "original fifo made # non-optimal decisions out of # decisions.\n \
-			  %d %d\n", nonopt_decisions, decisions);
-		return sched_status::COMPLETE;
+	if (cpuid == 0)
+		logger(LOG_INFO, "#non-optimal/#total decisions. %d %d\n", nonopt_decisions, decisions);
+	return sched_status::COMPLETE;
       }
       bool success(false);
       queue_lock.lock();

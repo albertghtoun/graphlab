@@ -52,7 +52,7 @@ namespace graphlab {
       } // End of init      
       void run() {
         assert(engine != NULL);
-        logger(LOG_INFO, "Worker %d started.\n", workerid);        
+        // logger(LOG_INFO, "Worker %d started.\n", workerid);        
         /* Start consuming tasks while the engine is active*/
         while(engine->active) {
           bool executed_task = engine->run_once(workerid);         
@@ -62,7 +62,7 @@ namespace graphlab {
         // // Do any remaining syncs if any
         if(engine->shared_data != NULL)
           engine->shared_data->signal_all();
-        logger(LOG_INFO, "Worker %d finished.\n", workerid);
+        // logger(LOG_INFO, "Worker %d finished.\n", workerid);
       }      
     }; // end of task worker
 

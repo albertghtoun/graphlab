@@ -326,7 +326,7 @@ FILE * fp;
 int main(int argc, char** argv) {
   global_logger().set_log_level(LOG_INFO);
   global_logger().set_log_to_console(true);
-  logger(LOG_INFO, "PageRank starting\n");
+  // logger(LOG_INFO, "PageRank starting\n");
   
   int numCPU = sysconf(_SC_NPROCESSORS_ONLN); 
   // Setup the parser

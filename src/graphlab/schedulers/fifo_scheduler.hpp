@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cassert>
 
+#include <graphlab/logger/logger.hpp>
 #include <graphlab/graph/graph.hpp>
 #include <graphlab/scope/iscope.hpp>
 #include <graphlab/tasks/update_task.hpp>
@@ -52,6 +53,7 @@ namespace graphlab {
       callbacks(ncpus, direct_callback<Graph>(this, engine)), 
       vertex_tasks(g.num_vertices()) {
       numvertices = g.num_vertices();
+      decisions = 0;
     }
 
     callback_type& get_callback(size_t cpuid) {
@@ -61,14 +63,19 @@ namespace graphlab {
 
     /** Get the next element in the queue */
     sched_status::status_enum get_next_task(size_t cpuid, update_task_type &ret_task) {    
-      if (terminator.finish()) return sched_status::COMPLETE;
-      
+      if (terminator.finish()) {
+	if (cpuid == 0)
+		logger(LOG_INFO, "#total decisions. %d\n", decisions);
+	return sched_status::COMPLETE;
+      }
+
       bool success(false);
       queue_lock.lock();
       if(!task_queue.empty()) {
         ret_task = task_queue.front();
         task_queue.pop();
         success = true;
+	decisions++;
       }
       queue_lock.unlock();
       
@@ -142,6 +149,8 @@ namespace graphlab {
     vertex_task_set<Graph> vertex_tasks;
   
     task_count_termination terminator;
+    
+    long decisions;
   }; 
 
 
